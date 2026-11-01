@@ -115,28 +115,71 @@ python --version
 
 ## How to Run
 
-**Current status:** Phase 0 complete (environment setup).
+### Phase 1 – Data Ingestion (Complete)
+
+**One-command data refresh (for both team members):**
+
+```bash
+source .venv/bin/activate
+python -m src.data.stock_data
+```
+
+This command:
+- Downloads 7 tickers (AAPL, MSFT, JPM, JNJ, PG, XOM, AMZN) from 2018-01-01 to today via yfinance
+- Cleans (drops all-NaN tickers, ffill limit 5, dropna to preserve PSD)
+- Saves raw to `data/raw/prices_raw_<tickers>_<start>_<end>.csv` and cleaned to `data/processed/prices_clean_<tickers>_<start>_<end>.csv` (ignored by Git, folders tracked via .gitkeep)
+- Validates (checks positive, no NaN, duplicate dates, trading days/year ~252)
+- Prints summary and saves Markdown report to `docs/data_summary.md`
+
+**Example output:**
+```
+Raw shape: (2220, 7)
+Clean shape: (2220, 7), Dropped: []
+Validation Summary:
+  n_tickers: 7, n_rows: 2220, trading_days/year avg: 251.6
+  all_positive: True, has_nan: False, duplicate_dates: False
+```
+
+**Other commands:**
+
+```bash
+# Run offline unit tests (no Yahoo call)
+pytest tests/test_stock_data.py -v
+# Expected: 10 passed
+
+# Use caching in code
+from src.data.stock_data import fetch_and_cache
+df = fetch_and_cache(["AAPL","MSFT"], "2020-01-01", None)  # loads from cache if exists
+
+# Exploratory notebook
+# Open notebooks/exploratory_analysis.ipynb in VS Code Jupyter
+# Run All – Plotly charts render with HTML(fig.to_html()) workaround
+
+# Round-trip test
+python - << 'PY'
+from src.data.stock_data import save_prices, load_prices
+import pandas as pd
+df = pd.DataFrame({"AAPL":[100.1]}, index=pd.date_range("2023-01-01", periods=1))
+save_prices(df, "data/raw/test.csv")
+print(load_prices("data/raw/test.csv").equals(df))
+PY
+```
 
 **Phase 6 placeholder:** Streamlit app will be added in `app/`:
 
 ```bash
-# Future command (not yet available):
+# Future command (Phase 6):
 streamlit run app/app.py
-# Will be served on port 8501 (forwarded in devcontainer)
+# Served on port 8501 (forwarded in devcontainer)
 ```
 
-Until then, run notebooks or `pytest`:
-
-```bash
-pytest -v
-```
 
 ## Team Members and Course Context
 
 - **Repository:** `aryansjainbtech25-sys/05-Financial-Portfolio-Optimization-and-Risk-Allocator`
 - **Course/Project:** Financial Portfolio Optimization – 8-phase implementation
-  - Phase 0: Environment & Skeleton (Tasks 0.1–0.6) – ✅ Complete
-  - Phase 1: Data Ingestion (yfinance)
+  - Phase 0: Environment & Skeleton (Tasks 0.1–0.9) – ✅ Complete
+  - Phase 1: Data Ingestion (yfinance) – ✅ Complete (Tasks 1.1–1.7, 10 tests green, data_summary.md, notebook)
   - Phase 2: Preprocessing & Returns
   - Phase 3: Linear Algebra (Covariance, Expected Returns)
   - Phase 4: Optimization
