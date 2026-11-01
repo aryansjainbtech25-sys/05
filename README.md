@@ -147,7 +147,10 @@ pytest -v
 
 ## License
 
-Academic project – License to be added in Phase 7. All market data via Yahoo Finance is for research/educational purposes per Yahoo terms of use.
+This project is licensed under the MIT License – see the [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2026 Financial Portfolio Optimization and Risk Allocator Team. Academic coursework use.
+
 
 ---
 *Setup verified on Python 3.14.2 | numpy 2.5.4 | pandas 3.1.0 | scipy 1.18.1 | yfinance 1.4.1 | plotly 7.1.0 | streamlit 1.66.1 | pytest 9.2.0*
