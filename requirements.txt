@@ -5,3 +5,5 @@ yfinance==1.4.1
 plotly==7.1.0
 streamlit==1.66.1
 pytest==9.2.0
+nbformat==5.10.4
+ipykernel==6.29.5
