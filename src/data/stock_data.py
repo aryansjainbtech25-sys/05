@@ -1,14 +1,15 @@
-
 """
 src/data/stock_data.py
-Phase 1.1-1.3 – Data Universe + Download + Cleaning
+Phase 1.1-1.4 – Universe + Download + Cleaning + Persistence
 
 yfinance 1.4.1 with auto_adjust=True returns Close already adjusted.
-Raw download returns MultiIndex (Field, Ticker) – flattened to ticker columns.
-Adjusted close avoids artificial split/dividend jumps that corrupt covariance.
+Adjusted close avoids split/dividend jumps that corrupt covariance.
+Covariance requires rectangular complete matrix – cleaning uses full-case deletion to preserve PSD.
+CSV round-trip must preserve float precision – no rounding on save.
 """
 
 from typing import List, Optional, Tuple
+from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
@@ -25,6 +26,9 @@ DEFAULT_TICKERS = [
 DEFAULT_START_DATE = "2018-01-01"
 DEFAULT_END_DATE = None
 TRADING_DAYS_PER_YEAR = 252
+
+RAW_DATA_DIR = Path("data/raw")
+PROCESSED_DATA_DIR = Path("data/processed")
 
 
 def download_price_data(
@@ -94,7 +98,6 @@ def clean_price_data(
     dropped: List[str] = []
     df = raw.copy()
 
-    # Entirely failed tickers appear as all-NaN columns
     for col in df.columns.tolist():
         if df[col].isna().all():
             dropped.append(col)
@@ -105,7 +108,6 @@ def clean_price_data(
     if df.empty:
         raise ValueError(f"All tickers dropped as all-NaN. Dropped={dropped}")
 
-    # Drop tickers with low coverage: > (1-min_coverage) NaNs
     n_rows = len(df)
     for col in df.columns.tolist():
         nan_frac = df[col].isna().sum() / n_rows if n_rows > 0 else 1.0
@@ -118,7 +120,6 @@ def clean_price_data(
     if df.empty:
         raise ValueError(f"No tickers survive coverage threshold {min_coverage}. Dropped={dropped}")
 
-    # Sanity: drop non-positive or non-finite price columns
     for col in df.columns.tolist():
         vals = df[col].dropna()
         if not vals.empty:
@@ -133,7 +134,6 @@ def clean_price_data(
     if df.empty:
         raise ValueError(f"All tickers dropped after sanity. Dropped={dropped}")
 
-    # Forward-fill short gaps (exchange halts) then full-case deletion to preserve PSD
     df = df.sort_index()
     df = df.ffill(limit=5)
     df = df.dropna(how='any')
@@ -156,3 +156,87 @@ def clean_price_data(
             dropped_unique.append(t)
 
     return df, dropped_unique
+
+
+def _build_filename(prefix: str, tickers: List[str], start: str, end: Optional[str]) -> str:
+    # Filename convention includes tickers and date range to avoid overwrites
+    # Example: prices_clean_AAPL_MSFT_JPM_2018-01-01_2024-12-31.csv
+    tickers_part = "_".join(tickers[:5])
+    if len(tickers) > 5:
+        tickers_part += f"_plus{len(tickers)-5}"
+    end_part = end if end is not None else "today"
+    return f"{prefix}_{tickers_part}_{start}_{end_part}.csv"
+
+
+def save_prices(df: pd.DataFrame, path: str | Path) -> None:
+    path = Path(path)
+    # Ensure parent directories exist for reproducibility
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if df.empty:
+        raise ValueError(f"Cannot save empty DataFrame to {path}")
+
+    # Preserve exact float precision – default to_csv writes 17 significant digits
+    df.to_csv(path, index=True)
+
+
+def load_prices(path: str | Path) -> pd.DataFrame:
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"CSV not found at {path}")
+
+    df = pd.read_csv(path, index_col=0, parse_dates=True)
+
+    if df.empty:
+        raise ValueError(f"Loaded empty DataFrame from {path}")
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+
+    if df.index.duplicated().any():
+        raise ValueError(f"Duplicate dates found in {path}")
+
+    if not df.index.is_monotonic_increasing:
+        df = df.sort_index()
+
+    df.index.name = "Date"
+
+    # Validate numeric columns
+    for col in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            try:
+                df[col] = pd.to_numeric(df[col], errors='raise')
+            except Exception as e:
+                raise ValueError(f"Column {col} in {path} is not numeric: {e}")
+
+    return df
+
+
+def fetch_and_cache(
+    tickers: List[str],
+    start: str,
+    end: Optional[str] = None,
+    min_coverage: float = 0.95,
+    use_cache: bool = True,
+    raw_dir: Path = RAW_DATA_DIR,
+    processed_dir: Path = PROCESSED_DATA_DIR,
+) -> pd.DataFrame:
+    # Check cache first for offline-friendly fast loads
+    processed_filename = _build_filename("prices_clean", tickers, start, end)
+    processed_path = Path(processed_dir) / processed_filename
+
+    raw_filename = _build_filename("prices_raw", tickers, start, end)
+    raw_path = Path(raw_dir) / raw_filename
+
+    if use_cache and processed_path.exists():
+        return load_prices(processed_path)
+
+    # Download, clean, save both raw and processed for reproducibility
+    raw_df = download_price_data(tickers, start, end)
+    clean_df, dropped = clean_price_data(raw_df, min_coverage)
+
+    # Save raw and cleaned for Phase 2+ offline use
+    save_prices(raw_df, raw_path)
+    save_prices(clean_df, processed_path)
+
+    return clean_df
