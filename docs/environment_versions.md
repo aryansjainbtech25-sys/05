@@ -1,47 +1,37 @@
 # Environment Versions Snapshot
+Python: 3.14.2 (Codespace) / 3.9.25 (CI)
+- numpy==2.5.4
+- pandas==3.1.0
+- scipy==1.18.1
+- yfinance==1.4.1
+- plotly==6.3.0
+- kaleido==0.2.1
+- tabulate==0.9.0
+- streamlit==1.66.1
+- pytest==9.2.0
 
-**Verified on:** 2026-11-01 (Phase 0.8)  
-**Python:** 3.14.2  
-**Environment:** `.venv/` at `/workspaces/05-Financial-Portfolio-Optimization-and-Risk-Allocator/.venv/bin/python` + Codespace devcontainer `mcr.microsoft.com/devcontainers/python:3.14-bullseye`
+## Pin History & Rationale
 
-## Pinned Dependencies (from requirements.txt)
+- **Phase 0**: `plotly==7.1.0` pinned. Plotly 7.x requires `kaleido>=1.0.0` for static image export (`fig.write_image`).
+- **Phase 3 Task 3.7**: `kaleido>=1.0.0` bundles its own Chrome via `choreographer` and fails in Codespace sandbox (browser closes immediately, missing libnss3, needs --no-sandbox). Brave vs Chrome irrelevant — kaleido v1 uses its own chrome at `~/.local/share/choreographer/deps/chrome-linux64/chrome`.
+- **Fix**: Downgrade to `plotly==6.3.0` + `kaleido==0.2.1`. Plotly 6.x still supports kaleido 0.2.1 (deprecated but functional), which bundles chromium inside pip wheel and works headless without system Chrome.
+- `tabulate==0.9.0` added for pretty-printing eigen_summary_table in CLI and docs (used in `src/linear_algebra/eigen_analysis.py` `print(tabulate(...))` fallback). Legit runtime dependency for docs generation, belongs in requirements.txt.
+- Verified: `python -m src.visualization.charts` saves PNGs 148KB/130KB via kaleido 0.2.1 without Chrome.
 
-| Package | Pinned Version | Import Verified | Source |
-|---------|----------------|-----------------|--------|
-| numpy | 2.5.4 | ✅ | `import numpy; numpy.__version__` |
-| pandas | 3.1.0 | ✅ | `import pandas; pandas.__version__` |
-| scipy | 1.18.1 | ✅ | `import scipy; scipy.__version__` |
-| yfinance | 1.4.1 | ✅ | `import yfinance; yfinance.__version__` |
-| plotly | 7.1.0 | ✅ | `import plotly; plotly.__version__` |
-| streamlit | 1.66.1 | ✅ | `import streamlit; streamlit.__version__` |
-| pytest | 9.2.0 | ✅ | `import pytest; pytest.__version__` |
+Smoke test: all imports OK, `fig.write_image(engine="kaleido")` works without Chrome.
 
-## Smoke Test Output
-
-```
-Python: 3.14.2
-numpy: 2.5.4 - OK
-pandas: 3.1.0 - OK
-yfinance: 1.4.1 - OK
-scipy: 1.18.1 - OK
-plotly: 7.1.0 - OK
-streamlit: 1.66.1 - OK
-pytest: 9.2.0 - OK
-```
-
-All imports succeed with no ModuleNotFoundError. Versions match pins in requirements.txt.
-
-## How to Reproduce
+## Live Verification
 
 ```bash
-source .venv/bin/activate
-python -c "import numpy, pandas, yfinance, scipy, plotly, streamlit, pytest; print('All imports OK')"
-python -c "import numpy, pandas, yfinance, scipy, plotly, streamlit, pytest; [print(f'{m.__name__}: {getattr(m, "__version__", "unknown")}') for m in [numpy, pandas, yfinance, scipy, plotly, streamlit, pytest]]"
+pip show plotly kaleido tabulate
+# plotly 6.3.0, kaleido 0.2.1, tabulate 0.9.0
+python - << 'PY'
+import plotly.graph_objects as go
+fig = go.Figure(go.Scatter(x=[1,2], y=[3,4]))
+fig.write_image("/tmp/test.png", engine="kaleido")
+print("kaleido 0.2.1 works ✅")
+PY
+pytest tests/test_covariance.py -v  # 17 passed
 ```
 
-Or run temporary script:
-
-```bash
-python smoke_test_temp.py
-# then delete: rm smoke_test_temp.py
-```
+This matches `pip freeze` and `requirements.txt`.
