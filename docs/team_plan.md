@@ -93,3 +93,25 @@ Sharpe_annual = Sharpe_daily × √252
 ```
 
 Fixing 252 here avoids classic bugs of using 250, 252, 260, or 365 inconsistently across modules.
+
+## Return Convention (Phase 2.1)
+
+**Convention chosen:** Simple returns (`RETURN_TYPE = "simple"`), defined in `src/preprocessing/returns.py`.
+
+**Formulas:**
+- Simple return: r_t = (P_t - P_{t-1}) / P_{t-1} = P_t / P_{t-1} - 1
+- Log return: r_t = ln(P_t / P_{t-1}) = ln(P_t) - ln(P_{t-1}) [documented but not used]
+
+**Why simple:**
+1. Markowitz linearity: R_p = w^T mu exact only for simple returns.
+2. Covariance identity Sigma = X^T X/(T-1) where X is centered simple-return matrix.
+3. Quadratic forms w^T Sigma w require linear aggregation.
+4. Log variant would be separate helper `compute_log_returns`, not wired to pipeline.
+
+**Annualization (single source of truth):**
+- TRADING_DAYS_PER_YEAR = 252 imported from src.data.stock_data
+- mu_annual = mu_daily * 252
+- Sigma_annual = Sigma_daily * 252
+- sigma_annual = sigma_daily * sqrt(252)
+
+**Verification:** from src.preprocessing.returns import RETURN_TYPE, TRADING_DAYS_PER_YEAR; assert RETURN_TYPE in {"simple","log"} and TRADING_DAYS_PER_YEAR == 252
