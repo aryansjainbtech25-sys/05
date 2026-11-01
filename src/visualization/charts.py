@@ -204,6 +204,7 @@ def plot_eigenvalue_spectrum(eigen_dict: dict) -> go.Figure:
     return fig
 
 
+
 if __name__ == "__main__":
     from pathlib import Path
     import sys
@@ -254,29 +255,34 @@ if __name__ == "__main__":
     def save_fig(fig, name, **kwargs):
         png_path = screenshots_dir / f"{name}.png"
         html_path = screenshots_dir / f"{name}.html"
-        # Strategy 1: try default write_image (works with kaleido 0.2.1)
+        # Try kaleido 0.2.1 first (plotly 6.x compatible)
+        try:
+            fig.write_image(str(png_path), engine="kaleido", **kwargs)
+            print(f"Saved {png_path} via kaleido 0.2.1")
+            return True
+        except Exception as e:
+            print(f"kaleido 0.2.1 failed for {name}: {e}")
+
+        # Try default (kaleido v1)
         try:
             fig.write_image(str(png_path), **kwargs)
             print(f"Saved {png_path} via default engine")
             return True
         except Exception as e:
-            print(f"Default write_image failed for {name}: {e}")
+            print(f"default write_image failed for {name}: {e}")
 
-        # Strategy 2: try kaleido v1 with get_chrome_sync
+        # Try with chrome auto-install
         try:
             import kaleido
             if hasattr(kaleido, "get_chrome_sync"):
-                try:
-                    kaleido.get_chrome_sync()
-                except Exception:
-                    pass
+                kaleido.get_chrome_sync()
             fig.write_image(str(png_path), **kwargs)
-            print(f"Saved {png_path} via kaleido after get_chrome_sync")
+            print(f"Saved {png_path} after get_chrome_sync")
             return True
         except Exception as e:
-            print(f"Kaleido v1 save failed for {name}: {e}")
+            print(f"chrome fallback failed for {name}: {e}")
 
-        # Strategy 3: fallback HTML + warn
+        # Last resort HTML
         try:
             fig.write_html(str(html_path))
             print(f"Saved fallback HTML {html_path}")
@@ -290,5 +296,5 @@ if __name__ == "__main__":
     if ok1 and ok2:
         print("All PNGs saved successfully")
     else:
-        print("Some PNGs failed - HTML fallback created. Try: pip install kaleido==0.2.1")
+        print("Some PNGs failed - check kaleido version")
     print("Done")
