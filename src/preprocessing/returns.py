@@ -1,6 +1,7 @@
+from __future__ import annotations
 """
 src/preprocessing/returns.py
-Phase 2.1 – Return Convention and Annualization Constants
+Phase 2.1–2.2 – Return Convention, Annualization, and Return Calculation
 
 Convention chosen: SIMPLE returns.
 
@@ -18,7 +19,7 @@ Why simple, not log:
 
 Formulas:
 Simple: r_t = (P_t - P_{t-1}) / P_{t-1} = P_t / P_{t-1} - 1
-Log:    r_t = ln(P_t / P_{t-1}) = ln(P_t) - ln(P_{t-1})  (not used in main pipeline)
+Log:    r_t = ln(P_t / P_{t-1}) = ln(P_t) - ln(P_{t-1})  (optional helper)
 
 Annualization identities (must be used verbatim in Phase 3,4,5,6):
 mu_annual = mu_daily * 252
@@ -29,8 +30,66 @@ Constants are centralized: TRADING_DAYS_PER_YEAR imported from src.data.stock_da
 not redefined. RETURN_TYPE is the single source of truth for downstream phases.
 """
 
+from typing import Literal
+import numpy as np
+import pandas as pd
+
 from src.data.stock_data import TRADING_DAYS_PER_YEAR
 
 RETURN_TYPE = "simple"
 
-__all__ = ["RETURN_TYPE", "TRADING_DAYS_PER_YEAR"]
+__all__ = ["RETURN_TYPE", "TRADING_DAYS_PER_YEAR", "compute_returns", "compute_log_returns"]
+
+
+def compute_returns(
+    prices: pd.DataFrame,
+    return_type: Literal["simple", "log"] = "simple",
+) -> pd.DataFrame:
+    """
+    Compute daily returns from price DataFrame.
+
+    Args:
+        prices: DataFrame with DatetimeIndex, columns=tickers, values>0, no NaN (cleaned).
+        return_type: "simple" (default) or "log".
+
+    Returns:
+        DataFrame of same columns, DatetimeIndex, first row NaN dropped.
+        Simple: (P_t - P_{t-1}) / P_{t-1}
+        Log: ln(P_t / P_{t-1})
+
+    Raises:
+        ValueError: if prices empty, has NaN, or non-positive.
+    """
+    if prices.empty:
+        raise ValueError("compute_returns received empty DataFrame")
+
+    if not isinstance(prices.index, pd.DatetimeIndex):
+        prices = prices.copy()
+        prices.index = pd.to_datetime(prices.index)
+
+    if prices.isna().any().any():
+        raise ValueError("compute_returns: prices contains NaN – run clean_price_data first")
+
+    if (prices <= 0).any().any():
+        bad = [c for c in prices.columns if (prices[c] <= 0).any()]
+        raise ValueError(f"compute_returns: non-positive prices in {bad}")
+
+    if return_type == "simple":
+        returns = prices.pct_change()
+    elif return_type == "log":
+        returns = np.log(prices / prices.shift(1))
+    else:
+        raise ValueError(f"Unsupported return_type {return_type}, expected simple or log")
+
+    returns = returns.iloc[1:].copy()
+    returns.index.name = "Date"
+
+    if returns.isna().any().any():
+        raise ValueError("compute_returns: returns contain NaN after calculation – check price gaps")
+
+    return returns
+
+
+def compute_log_returns(prices: pd.DataFrame) -> pd.DataFrame:
+    """Separate helper for log returns, not wired to main pipeline."""
+    return compute_returns(prices, return_type="log")
