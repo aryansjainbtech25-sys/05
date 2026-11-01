@@ -22,13 +22,16 @@ def test_cleaning_failed_ticker_all_nan():
 
 
 def test_cleaning_interior_gap_forward_filled():
-    df = pd.DataFrame(
-        {"AAPL": [100.0, None, 102.0]},
-        index=pd.date_range("2023-01-01", periods=3),
-    )
+    # 20 rows, 1 NaN = 5% missing -> passes 95% coverage, then ffill fills it
+    idx = pd.date_range("2023-01-01", periods=20)
+    values = [100.0 + i for i in range(20)]
+    values[5] = None
+    df = pd.DataFrame({"AAPL": values}, index=idx)
     clean, dropped = clean_price_data(df)
     assert clean.isna().sum().sum() == 0
     assert dropped == []
+    assert len(clean) == 20
+
 
 
 def test_cleaning_long_gap_over_limit_drops_column():
