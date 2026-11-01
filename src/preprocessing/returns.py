@@ -26,6 +26,7 @@ Constants centralized: TRADING_DAYS_PER_YEAR from src.data.stock_data.
 """
 
 from __future__ import annotations
+from pathlib import Path
 
 from typing import Literal
 import numpy as np
@@ -229,3 +230,137 @@ def compute_volatility(
 
     vol.name = "volatility"
     return vol
+
+
+def process_returns_pipeline(
+    prices: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.Series, pd.Series, dict]:
+    """
+    One-call pipeline: prices -> returns -> (mu, sigma, summary).
+
+    Guarantees mu and sigma come from same returns matrix used in Phase 3 covariance,
+    preventing bug of mu from one window and Sigma from another.
+
+    Args:
+        prices: Clean price DataFrame from Phase 1 (DatetimeIndex, >0, no NaN).
+
+    Returns:
+        returns_df: daily simple returns, shape (T-1, N)
+        mu_series: annualized expected returns, pd.Series indexed by ticker
+        sigma_series: annualized volatility, pd.Series indexed by ticker
+        summary_dict: dict with n_assets, n_obs, convention, annualization, min/max, best/worst.
+
+    Math: mu and sigma derived from T-1 degrees of freedom (T trading days -> T-1 returns).
+    """
+    returns_df = compute_daily_returns(prices, method="simple")
+    mu_series = compute_expected_returns(returns_df, annualize=True)
+    sigma_series = compute_volatility(returns_df, annualize=True)
+
+    n_assets = len(prices.columns)
+    n_obs_daily = len(returns_df)
+
+    best_return_ticker = mu_series.idxmax()
+    best_return_value = float(mu_series.max())
+    lowest_vol_ticker = sigma_series.idxmin()
+    lowest_vol_value = float(sigma_series.min())
+
+    summary = {
+        "n_assets": n_assets,
+        "n_obs_daily": n_obs_daily,
+        "n_obs_prices": len(prices),
+        "return_convention": RETURN_TYPE,
+        "annualization": TRADING_DAYS_PER_YEAR,
+        "annualization_vol_factor": f"sqrt({TRADING_DAYS_PER_YEAR})",
+        "mu_min": float(mu_series.min()),
+        "mu_max": float(mu_series.max()),
+        "sigma_min": float(sigma_series.min()),
+        "sigma_max": float(sigma_series.max()),
+        "best_return_ticker": best_return_ticker,
+        "best_return_value": best_return_value,
+        "lowest_vol_ticker": lowest_vol_ticker,
+        "lowest_vol_value": lowest_vol_value,
+        "tickers": list(prices.columns),
+        "degrees_of_freedom_note": "mu and sigma derived from T-1 degrees (T prices -> T-1 returns)",
+    }
+
+    return returns_df, mu_series, sigma_series, summary
+
+
+def summary_to_markdown(mu: pd.Series, sigma: pd.Series, summary: dict) -> str:
+    lines = []
+    lines.append("# Returns Summary Report")
+    lines.append("")
+    lines.append(f"**Generated:** {pd.Timestamp.now().date()}")
+    lines.append(f"**Convention:** {summary['return_convention']} returns, annualized with {summary['annualization']} trading days")
+    lines.append(f"**Note:** mu and sigma derived from T-1 degrees of freedom (T prices -> T-1 returns)")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| n_assets | {summary['n_assets']} |")
+    lines.append(f"| n_obs_prices | {summary['n_obs_prices']} |")
+    lines.append(f"| n_obs_daily_returns | {summary['n_obs_daily']} |")
+    lines.append(f"| mu_min (annual) | {summary['mu_min']:.4f} |")
+    lines.append(f"| mu_max (annual) | {summary['mu_max']:.4f} |")
+    lines.append(f"| sigma_min (annual) | {summary['sigma_min']:.4f} |")
+    lines.append(f"| sigma_max (annual) | {summary['sigma_max']:.4f} |")
+    lines.append(f"| best_return_ticker | {summary['best_return_ticker']} ({summary['best_return_value']:.4f}) |")
+    lines.append(f"| lowest_vol_ticker | {summary['lowest_vol_ticker']} ({summary['lowest_vol_value']:.4f}) |")
+    lines.append("")
+    lines.append("### Per-Ticker mu_annual and sigma_annual")
+    lines.append("")
+    lines.append("| Ticker | mu_annual | sigma_annual |")
+    lines.append("|--------|-----------|--------------|")
+    for ticker in summary["tickers"]:
+        mu_val = mu[ticker] if ticker in mu.index else float("nan")
+        sigma_val = sigma[ticker] if ticker in sigma.index else float("nan")
+        lines.append(f"| {ticker} | {mu_val:.4f} | {sigma_val:.4f} |")
+    lines.append("")
+    lines.append("**Sanity:** AAPL sigma typically 0.20-0.40, JNJ 0.12-0.22, XOM 0.20-0.35. If 0.01 or 4.0, annualization bug.")
+    lines.append("")
+    lines.append("**Annualization:** mu_annual = mu_daily * 252, sigma_annual = sigma_daily * sqrt(252)")
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    from src.data.stock_data import load_prices, PROCESSED_DATA_DIR
+
+    # Find latest processed CSV
+    processed_dir = Path(PROCESSED_DATA_DIR)
+    csv_files = list(processed_dir.glob("prices_clean_*.csv"))
+    if not csv_files:
+        # Fallback: check data/processed directly
+        alt_dir = Path("data/processed")
+        csv_files = list(alt_dir.glob("prices_clean_*.csv"))
+    if not csv_files:
+        print("No processed price CSV found. Run: python -m src.data.stock_data first")
+        print(f"Searched in {processed_dir} and data/processed/")
+        raise SystemExit(1)
+
+    latest = max(csv_files, key=lambda p: p.stat().st_mtime)
+    print(f"Loading latest processed prices: {latest}")
+    prices = load_prices(latest)
+    print(f"Prices shape: {prices.shape}, tickers: {list(prices.columns)}")
+
+    returns_df, mu_series, sigma_series, summary = process_returns_pipeline(prices)
+
+    print(f"\nReturns shape: {returns_df.shape}")
+    print("\nMu annual:")
+    print(mu_series)
+    print("\nSigma annual:")
+    print(sigma_series)
+    print("\nSummary:")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+
+    md = summary_to_markdown(mu_series, sigma_series, summary)
+    print("\n" + md)
+
+    docs_path = Path("docs/return_summary.md")
+    docs_path.parent.mkdir(parents=True, exist_ok=True)
+    docs_path.write_text(md)
+    print(f"\nReport saved to {docs_path}")
+
+    # Sanity warnings
+    for ticker, sigma_val in sigma_series.items():
+        if sigma_val < 0.05 or sigma_val > 1.0:
+            print(f"WARNING: {ticker} sigma_annual {sigma_val:.4f} outside typical 0.05-1.0 range – check annualization")
