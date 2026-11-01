@@ -115,3 +115,22 @@ Fixing 252 here avoids classic bugs of using 250, 252, 260, or 365 inconsistentl
 - sigma_annual = sigma_daily * sqrt(252)
 
 **Verification:** from src.preprocessing.returns import RETURN_TYPE, TRADING_DAYS_PER_YEAR; assert RETURN_TYPE in {"simple","log"} and TRADING_DAYS_PER_YEAR == 252
+
+### Volatility Convention (Phase 2.4)
+
+**Function:** `compute_volatility(returns, annualize=True) -> pd.Series` in `src/preprocessing/returns.py`.
+
+**Formula:**
+- sigma_i = sqrt( (1/(T-1)) sum_t (r_{i,t} - mu_i)^2 ) – sample std, ddof=1.
+- Annualized: sigma_annual = sigma_daily * sqrt(252)
+
+**Why sqrt(252) not 252:**
+Variance adds linearly under independence: Var(annual) ≈ 252 * Var(daily). Std = sqrt(Var), so sqrt(252*Var) = sqrt(252)*sigma. Covariance Sigma annualizes by *252, volatility by *sqrt(252). Mixing these is a common undergrad error.
+
+**DDOF Contract (critical for Phase 3):**
+- Phase 2 volatility uses ddof=1 (pandas .std() default).
+- Phase 3 covariance Sigma = X^T X / (T-1) uses T-1 denominator.
+- If Phase 2 used ddof=0, sqrt(diag(Sigma_annual)) would disagree with sigma_annual by sqrt((T-1)/T).
+- Contract verified: np.isclose(sigma_annual, sqrt(var(ddof=1)*252)) and later sqrt(diag(Sigma_annual)) == sigma_annual elementwise.
+
+**Verification:** returns.std(ddof=1)*sqrt(252) exact match.
