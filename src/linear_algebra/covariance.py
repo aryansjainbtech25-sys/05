@@ -143,24 +143,99 @@ def compute_covariance_matrix(
 
 
 def compute_correlation_matrix(
+    Sigma: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Compute correlation matrix from Σ via Corr = D⁻¹ Σ D⁻¹, D = diag(σ_i).
+
+    Mathematical:
+        Corr_{ij} = Σ_{ij} / (σ_i σ_j)
+        Matrix form: Corr = D⁻¹ Σ D⁻¹, D = diag(σ)
+        diag(Corr)=1, entries ∈ [-1,1], symmetric, PSD
+
+    Correlation is unit-free – measures linear co-movement independent of scale,
+    so tech stock $300 and staple $40 comparable on same scale.
+
+    Eigenvalues: Corr is covariance of standardized returns (each column / σ).
+    Phase 4 optimization uses Σ (scale matters for portfolio variance), but
+    eigen-decomposition of Corr is what you plot for heatmap and inspect for
+    "market factor" dominance – different eigenproblems.
+
+    Args:
+        Sigma: (N,N) DataFrame, symmetric, PSD, positive diagonal, covariance
+
+    Shape:
+        in: (N,N) -> out: (N,N)
+
+    Returns:
+        DataFrame (N,N) correlation, index/columns same as Sigma
+
+    Raises:
+        ValueError if not symmetric, not PSD, non-positive diagonal
+
+    Note:
+        Does NOT call pd.DataFrame.corr – uses diagonal-scaling identity.
+        pd.DataFrame.corr may be used in tests as oracle only.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if Sigma.empty:
+        raise ValueError("compute_correlation_matrix received empty DataFrame")
+
+    if Sigma.shape[0] != Sigma.shape[1]:
+        raise ValueError(f"compute_correlation_matrix expects square Sigma, got {Sigma.shape}")
+
+    if Sigma.isna().any().any():
+        raise ValueError("compute_correlation_matrix: Sigma contains NaN")
+
+    # Validate symmetric
+    arr = Sigma.values
+    max_asym = np.max(np.abs(arr - arr.T))
+    if max_asym > 1e-8:
+        raise ValueError(f"compute_correlation_matrix: Sigma not symmetric, max asymmetry {max_asym}")
+
+    # Validate positive diagonal
+    diag_var = np.diag(arr)
+    if np.any(diag_var <= 0):
+        bad = [f"{c}:{v}" for c,v in zip(Sigma.columns, diag_var) if v <= 0]
+        raise ValueError(f"compute_correlation_matrix: non-positive variance {bad}")
+
+    # Validate PSD (eigenvalues >= -tol)
+    eigs = np.linalg.eigvalsh(arr)
+    if np.min(eigs) < -1e-8:
+        raise ValueError(f"compute_correlation_matrix: Sigma not PSD, min eig {np.min(eigs)}")
+
+    # Compute: sigma = sqrt(diag(Sigma)), D_inv = diag(1/sigma), Corr = D_inv @ Sigma @ D_inv
+    sigma = np.sqrt(diag_var)
+    # Avoid division by zero – already checked positive, but clip tiny
+    sigma = np.maximum(sigma, 1e-12)
+    D_inv = np.diag(1.0 / sigma)
+
+    Corr_values = D_inv @ arr @ D_inv
+
+    # Numerical cleanup: clip to [-1,1] due to float
+    Corr_values = np.clip(Corr_values, -1.0, 1.0)
+
+    # Force diagonal to 1.0 within tolerance
+    np.fill_diagonal(Corr_values, 1.0)
+
+    Corr_df = pd.DataFrame(Corr_values, index=Sigma.index, columns=Sigma.columns)
+
+    return Corr_df
+
+
+def compute_correlation_matrix_from_returns(
     returns: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Compute correlation matrix from covariance (helper for later tasks).
-
-    Correlation is scale-invariant, annualization cancels.
+    Convenience: compute correlation from returns via covariance.
 
     Returns:
-        DataFrame (N,N) correlation
+        Correlation DataFrame
     """
     Sigma = compute_covariance_matrix(returns, annualize=False)
-    # Use standard formula: corr = D^{-1} Sigma D^{-1}, D = diag(sigma)
-    diag = np.sqrt(np.diag(Sigma.values))
-    # Avoid division by zero
-    diag[diag == 0] = 1e-12
-    D_inv = np.diag(1.0 / diag)
-    Corr = D_inv @ Sigma.values @ D_inv
-    return pd.DataFrame(Corr, index=returns.columns, columns=returns.columns)
+    return compute_correlation_matrix(Sigma)
 
 def is_positive_semidefinite(M: pd.DataFrame | np.ndarray, tol: float = 1e-10) -> bool:
     """
