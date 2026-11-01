@@ -30,6 +30,10 @@ from .matrix_ops import (
 )
 
 __all__ = [
+    "is_positive_semidefinite",
+    "sigma_from_covariance",
+    "verify_covariance_properties",
+
     "center_columns",
     "transpose",
     "matrix_multiply",
@@ -157,3 +161,161 @@ def compute_correlation_matrix(
     D_inv = np.diag(1.0 / diag)
     Corr = D_inv @ Sigma.values @ D_inv
     return pd.DataFrame(Corr, index=returns.columns, columns=returns.columns)
+
+def is_positive_semidefinite(M: pd.DataFrame | np.ndarray, tol: float = 1e-10) -> bool:
+    """
+    Check if matrix is positive semidefinite (PSD).
+
+    Mathematical: M PSD iff all eigenvalues >= 0.
+    For covariance: Σ = (1/(T-1)) X̃^T X̃ = (1/(T-1)) ||X̃ w||^2 >=0 is Gram matrix, so PSD by construction.
+    Do NOT use determinant as test – det>0 necessary but not sufficient.
+
+    Args:
+        M: (N,N) ndarray or DataFrame, symmetric
+        tol: allow eigenvalues >= -tol for float round-off
+
+    Returns:
+        bool: True if all eigenvalues >= -tol
+
+    Raises:
+        ValueError if not square
+    """
+    arr = M.values if isinstance(M, pd.DataFrame) else __import__("numpy").asarray(M)
+    import numpy as np
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+        raise ValueError(f"is_positive_semidefinite expects square matrix, got {arr.shape}")
+    # Use eigvalsh for Hermitian (symmetric) – more stable than eig
+    eigs = np.linalg.eigvalsh(arr)
+    return np.all(eigs >= -tol)
+
+
+def sigma_from_covariance(Sigma_annual: pd.DataFrame) -> pd.Series:
+    """
+    Return σ = sqrt(diag(Σ_annual)).
+
+    Mathematical: Σ_ii = Var(r_i), sqrt = σ_i
+    Annualized: sqrt(252 * Σ_ii_daily) = sqrt(252)*σ_daily = σ_annual (Phase 2 contract)
+
+    Args:
+        Sigma_annual: (N,N) DataFrame, annualized covariance
+
+    Returns:
+        pd.Series indexed by ticker
+    """
+    import numpy as np
+    import pandas as pd
+    if Sigma_annual.empty:
+        raise ValueError("sigma_from_covariance received empty DataFrame")
+    diag = np.diag(Sigma_annual.values if isinstance(Sigma_annual, pd.DataFrame) else Sigma_annual)
+    if np.any(diag < -1e-12):
+        raise ValueError(f"sigma_from_covariance: negative variance {diag}")
+    # Clip tiny negative due to float
+    diag = np.maximum(diag, 0.0)
+    sigma = np.sqrt(diag)
+    if isinstance(Sigma_annual, pd.DataFrame):
+        return pd.Series(sigma, index=Sigma_annual.index, name="sigma_from_cov")
+    return pd.Series(sigma, name="sigma_from_cov")
+
+
+def verify_covariance_properties(
+    Sigma_daily: pd.DataFrame,
+    Sigma_annual: pd.DataFrame,
+    sigma_series: pd.Series,
+    tol_sym: float = 1e-10,
+    tol_psd: float = 1e-10,
+    tol_sigma: float = 1e-10,
+) -> dict:
+    """
+    Verify structural properties: symmetry, PSD, diag matches Phase 2 σ.
+
+    Hard requirements: symmetric True, psd True, diag_matches_sigma True.
+    Raises AssertionError if any fails.
+
+    Args:
+        Sigma_daily: (N,N) daily covariance
+        Sigma_annual: (N,N) annualized = daily*252
+        sigma_series: annualized σ from Phase 2 compute_volatility
+        tol_sym: symmetry tolerance
+        tol_psd: PSD tolerance
+        tol_sigma: sigma match tolerance
+
+    Returns:
+        dict {symmetric, psd, diag_matches_sigma, min_eig, max_eig, condition_number, max_diag_sigma_error}
+
+    Raises:
+        AssertionError if hard requirement fails
+    """
+    import numpy as np
+
+    # Symmetry checks
+    def _is_symmetric(M, tol):
+        arr = M.values if isinstance(M, pd.DataFrame) else np.asarray(M)
+        return np.max(np.abs(arr - arr.T)) <= tol
+
+    symmetric_daily = _is_symmetric(Sigma_daily, tol_sym)
+    symmetric_annual = _is_symmetric(Sigma_annual, tol_sym)
+    symmetric = symmetric_daily and symmetric_annual
+
+    # PSD checks via eigvalsh
+    def _eigs(M):
+        arr = M.values if isinstance(M, pd.DataFrame) else np.asarray(M)
+        return np.linalg.eigvalsh(arr)
+
+    eigs_daily = _eigs(Sigma_daily)
+    min_eig = float(np.min(eigs_daily))
+    max_eig = float(np.max(eigs_daily))
+    psd_daily = np.all(eigs_daily >= -tol_psd)
+
+    eigs_annual = _eigs(Sigma_annual)
+    psd_annual = np.all(eigs_annual >= -tol_psd)
+    psd = psd_daily and psd_annual
+
+    # Condition number
+    try:
+        cond = float(np.linalg.cond(Sigma_daily.values if isinstance(Sigma_daily, pd.DataFrame) else Sigma_daily))
+    except Exception:
+        cond = float("inf")
+
+    # diag matches sigma: sqrt(diag(Sigma_annual)) == sigma_series
+    sigma_from_cov = sigma_from_covariance(Sigma_annual)
+    # Align indices
+    if isinstance(sigma_series, pd.Series):
+        # Ensure same order
+        sigma_aligned = sigma_series.reindex(sigma_from_cov.index)
+    else:
+        sigma_aligned = pd.Series(sigma_series, index=sigma_from_cov.index)
+
+    diff = np.abs(sigma_from_cov.values - sigma_aligned.values)
+    max_err = float(np.max(diff))
+    diag_matches_sigma = max_err <= tol_sigma
+
+    result = {
+        "symmetric": bool(symmetric),
+        "psd": bool(psd),
+        "diag_matches_sigma": bool(diag_matches_sigma),
+        "min_eig": min_eig,
+        "max_eig": max_eig,
+        "min_eig_annual": float(np.min(eigs_annual)),
+        "max_eig_annual": float(np.max(eigs_annual)),
+        "condition_number": cond,
+        "max_diag_sigma_error": max_err,
+        "symmetric_daily": bool(symmetric_daily),
+        "symmetric_annual": bool(symmetric_annual),
+        "psd_daily": bool(psd_daily),
+        "psd_annual": bool(psd_annual),
+    }
+
+    # Hard requirements – raise AssertionError if fails
+    if not symmetric:
+        raise AssertionError(f"verify_covariance_properties: symmetry failed daily={symmetric_daily} annual={symmetric_annual}")
+    if not psd:
+        raise AssertionError(f"verify_covariance_properties: PSD failed min_eig={min_eig} (tol {tol_psd})")
+    if not diag_matches_sigma:
+        raise AssertionError(f"verify_covariance_properties: diag vs sigma mismatch max_err={max_err} > tol {tol_sigma}")
+
+    # Soft warning for condition number
+    if cond > 1e6:
+        # Do not fail, just note – suspect multicollinearity
+        result["warning"] = f"High condition number {cond} >1e6, suspect multicollinearity"
+
+    return result
