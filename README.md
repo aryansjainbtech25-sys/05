@@ -4,6 +4,15 @@ A quantitative finance application that downloads historical market data, estima
 
 **Target audience:** Students and practitioners learning portfolio optimization, risk management, and applied linear algebra / optimization in Python. Built as an 8-phase academic project.
 
+## Team Members
+
+| Name | Email | USN |
+| :--- | :--- | :--- |
+| Bibek Panigrahi | bibekpanigrahibtech25@rvu.edu.in | 1RUA25CSE0121 |
+| Aryan S Jain | aryansjainbtech25@rvu.edu.in | 1RUA25CSE0087 |
+
+
+
 ## Tech Stack
 
 Pinned versions verified on Python 3.14.2 (Oct 2026):
@@ -181,6 +190,140 @@ python -m src.preprocessing.returns
 # Loads latest data/processed/prices_clean_*.csv, computes returns (2219,7), mu, sigma, writes docs/return_summary.md
 # Sanity: AAPL sigma 0.20-0.40, JNJ 0.12-0.22
 ```
+
+```bash
+pytest tests/test_returns.py -v
+# 10 passed
+```
+
+### Phase 3 – Linear Algebra: Covariance, Correlation, Eigen (Complete)
+
+**Why Linear Algebra matters for finance:** Portfolio variance is exactly the quadratic form $w^\top \Sigma w$. Minimizing it is the Markowitz problem. This phase proves all identities from-scratch.
+
+**Notation:** $X \in \mathbb{R}^{T\times N}$ returns, $\tilde{X}=X-\mathbf{1}_T\mu^\top$ centered, $\Sigma = \tilde{X}^\top\tilde{X}/(T-1)$, $D=\text{diag}(\sigma)$, $\text{Corr}=D^{-1}\Sigma D^{-1}$, $\Sigma=V\Lambda V^\top$
+
+#### Tasks
+
+**3.1 Matrix utilities** `src/linear_algebra/matrix_ops.py`
+- `center_columns`, `transpose`, `matrix_multiply`, `quadratic_form(w,Σ)=wᵀΣw`, `is_symmetric`
+- Shape assertions: $(N\times T)(T\times N)=N\times N$
+
+**3.2 Covariance** `src/linear_algebra/covariance.py`
+- Derivation: $\text{Cov}(X_i,X_j)=E[(X_i-\mu_i)(X_j-\mu_j)]$ → sample $(1/(T-1))Σ_t(r_{t,i}-μ_i)(r_{t,j}-μ_j)$ → matrix $Σ_{\text{daily}}=\tilde{X}^\top\tilde{X}/(T-1)$
+- Annualized $Σ_{\text{annual}}=252·Σ_{\text{daily}}$
+- No `np.cov`, no `DataFrame.cov()` in impl — uses Task 3.1 primitives
+- Matches `returns.cov(ddof=1)` within 1e-12 (oracle test)
+
+**3.3 Symmetry & PSD**
+- Symmetry: $Σ_{ij}=Σ_{ji}$ by commutativity → $Σ=Σᵀ$, $||Σ-Σᵀ||_{max}≤1e-10$
+- PSD: $wᵀΣw = 1/(T-1)||\tilde{X}w||² ≥0$, Gram matrix → $λ_i≥0$, `eigvalsh` check min_eig≥-1e-12
+- `sigma_from_covariance`: $σ=√{\text{diag}(Σ_{\text{annual}})}$, matches Phase 2 `compute_volatility` within 1e-10 (hard requirement)
+- Condition number $κ=λ_{max}/λ_{min}$: 10–200 moderate for 7 tickers
+
+**3.4 Correlation**
+- $\text{Corr}_{ij}=Σ_{ij}/(σ_iσ_j)$, matrix $\text{Corr}=D^{-1}ΣD^{-1}$, $D=\text{diag}(σ)$
+- diag=1, ∈[-1,1], symmetric PSD, unit-free
+- Matches `returns.corr()` within 1e-12, $252$ cancels so annual=daily
+
+**3.5 Eigendecomposition**
+- Spectral theorem: $Σ=VΛVᵀ=Σ_k λ_k v_k v_kᵀ$, $V$ orthogonal $VᵀV=I$, $λ_1≥…≥λ_N≥0$
+- Uses `np.linalg.eigh` (Hermitian), descending, sign convention largest-magnitude positive
+- Variance explained: $\text{Tr}(Σ)=Σ_kλ_k$, $\text{explained}_k=λ_k/\text{Tr}(Σ)$, cumulative
+- Reconstruction $VΛVᵀ≈Σ$ within 1e-10, orthonormal $VᵀV≈I$ within 1e-10
+- First PC often all same sign — market mode
+
+**3.6 Summary table & docs**
+- `eigen_summary_table(Σ)` → (7,10) DataFrame: PC, eigenvalue, explained_ratio, cumulative_ratio, eigenvector weights
+- `first_principal_direction` → $v_1$
+- `docs/eigen_analysis.md` live run: trace, eigenvalues, explained 48% +19% +9%..., condition, first 3 PCs 77% → 3 independent factors
+- `docs/mathematical_foundations.md` — full LaTeX derivations (see Section 9)
+
+**3.7 Visualization** `src/visualization/charts.py`
+- `plot_correlation_heatmap(Corr)`: square, RdBu centered 0 range [-1,1], ticker labels, annotations 2 decimals diagonal 1.00
+- `plot_eigenvalue_spectrum(eigen_dict)`: bar eigenvalues descending + cumulative explained secondary y-axis ending 1.0
+- Plotly-only (approved), no seaborn/matplotlib
+- PNGs `docs/screenshots/corr_heatmap.png` (148KB, 600×600) + `eigen_spectrum.png` (130KB, 700×500) via `plotly==6.3.0` + `kaleido==0.2.1` (no Chrome/Brave needed)
+
+| Correlation Heatmap | Eigenvalue Spectrum |
+| :---: | :---: |
+| [Correlation](docs/screenshots/corr_heatmap.png) | [Eigen Spectrum](docs/screenshots/eigen_spectrum.png) |
+
+**3.8 Offline unit tests** `tests/test_covariance.py`
+- 17 tests, all offline, no yfinance (`conftest.py` mocks)
+- Oracle checks: Σ matches `returns.cov(ddof=1)`, Corr matches `returns.corr()`, eigenvalues match `eigvalsh(Σ)[::-1]`
+- Internal: $√{\text{diag}(Σ_{\text{annual}})}==σ$, $VΛVᵀ≈Σ$, $VᵀV≈I$, explained sum 1, $wᵀΣw==wΣw$, rejects non-symmetric, center_columns zero means
+- Break ddof=1→0 → tests 1,5 fail as expected, revert → green
+
+**3.9 Mathematical foundations** `docs/mathematical_foundations.md`
+- Sections: Notation, Covariance derivation, Symmetry, PSD, Eigendecomposition, Correlation as diagonal scaling, Annualization table, Why finance ($wᵀΣw$ → Markowitz), Implementation map
+
+#### How to Run Phase 3
+
+```bash
+source .venv/bin/activate
+
+# Install pinned stack (plotly 6.3 + kaleido 0.2.1 needed for PNGs without Chrome)
+pip install -r requirements.txt
+# numpy==2.5.4 pandas==3.1.0 scipy==1.18.1 yfinance==1.4.1 plotly==6.3.0 kaleido==0.2.1 tabulate==0.9.0 streamlit==1.66.1 pytest==9.2.0
+
+# 1. Compute covariance/correlation/eigen from latest processed CSV
+python - << 'PY'
+from src.data.stock_data import load_prices
+from src.preprocessing.returns import process_returns_pipeline
+from src.linear_algebra.covariance import compute_covariance_matrix, compute_correlation_matrix, verify_covariance_properties
+from src.linear_algebra.eigen_analysis import eigen_decompose, eigen_summary_table
+from pathlib import Path
+latest = max(Path("data/processed").glob("prices_clean_*.csv"), key=lambda p: p.stat().st_mtime)
+prices = load_prices(latest)
+rets, mu, sigma, _ = process_returns_pipeline(prices)
+Sigma = compute_covariance_matrix(rets, annualize=False)
+Sigma_a = compute_covariance_matrix(rets, annualize=True)
+Corr = compute_correlation_matrix(Sigma)
+eig = eigen_decompose(Sigma)
+print(f"Sigma shape {Sigma.shape}, symmetric {Sigma.index.equals(Sigma.columns)}, min_eig {eig['values'][-1]:.2e}")
+print(verify_covariance_properties(Sigma, Sigma_a, sigma))
+print(eigen_summary_table(Sigma_a).head())
+PY
+
+# 2. Generate PNGs (no Chrome needed)
+python -m src.visualization.charts
+# Saved docs/screenshots/corr_heatmap.png via kaleido 0.2.1 (148KB)
+# Saved docs/screenshots/eigen_spectrum.png (130KB)
+
+# 3. Run offline tests
+pytest tests/test_covariance.py -v
+# 17 passed ✅
+pytest tests/test_covariance.py tests/test_returns.py -v
+# 27 passed (Phase 3 17 + Phase 2 10)
+
+# 4. Hand-derive one off-diagonal Σ_{ij} (second team member check)
+python - << 'PY'
+import numpy as np, pandas as pd
+from src.data.stock_data import load_prices
+from src.preprocessing.returns import process_returns_pipeline
+from src.linear_algebra.covariance import compute_covariance_matrix
+from pathlib import Path
+latest = max(Path("data/processed").glob("prices_clean_*.csv"), key=lambda p: p.stat().st_mtime)
+rets = process_returns_pipeline(load_prices(latest))[0]
+col1,col2 = rets.columns[0], rets.columns[1]
+r1,r2 = rets[col1].values, rets[col2].values
+manual = ((r1-r1.mean())*(r2-r2.mean())).sum()/(len(r1)-1)
+computed = compute_covariance_matrix(rets).loc[col1,col2]
+print(f"Manual Σ_{col1},{col2} {manual:.8f} vs computed {computed:.8f} diff {abs(manual-computed):.2e} -> match atol 1e-12 ✅")
+PY
+```
+
+#### Cross-cutting Checks (Phase Completion Checklist)
+
+- Σ symmetric within 1e-10, PSD min_eig≥-1e-12, √diag(Σ_annual)==σ atol 1e-10 (max_err 5.55e-17)
+- Σ.index.equals(Σ.columns) and returns.columns
+- Corr equals returns.corr() within 1e-12
+- eigen_decompose descending, orthonormal, VΛVᵀ≈Σ within 1e-10 (recon 1.8e-16)
+- grep -r yfinance tests/ → nothing (conftest mocks)
+- docs/eigen_analysis.md + screenshots reflect live run (trace 0.544, eigenvalues [0.264,0.104,0.053...], 2219 obs)
+- Hand-derived off-diagonal matches
+- Phase 1 & 2 tests still green
+
 
 ## Team Members and Course Context
 
