@@ -117,10 +117,6 @@ def test_validate_duplicate_index_detection():
 def test_load_duplicate_dates_raises(tmp_path):
     # Create CSV with duplicate dates manually
     path = tmp_path / "dup.csv"
-    path.write_text("Date,AAPL
-2023-01-01,100
-2023-01-01,100
-2023-01-02,101
-")
+    path.write_text("Date,AAPL\n2023-01-01,100\n2023-01-01,100\n2023-01-02,101\n")
     with pytest.raises(ValueError, match="Duplicate dates"):
         load_prices(path)
