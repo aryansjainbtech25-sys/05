@@ -36,6 +36,9 @@ from src.data.stock_data import TRADING_DAYS_PER_YEAR
 RETURN_TYPE = "simple"
 
 __all__ = [
+    "compute_expected_returns",
+    "compute_volatility",
+
     "RETURN_TYPE",
     "TRADING_DAYS_PER_YEAR",
     "compute_daily_returns",
@@ -135,3 +138,81 @@ def compute_returns(
 def compute_log_returns(prices: pd.DataFrame) -> pd.DataFrame:
     """Separate helper for log returns, not wired to main pipeline."""
     return compute_daily_returns(prices, method="log")
+
+
+def compute_expected_returns(
+    returns: pd.DataFrame,
+    annualize: bool = True,
+) -> pd.Series:
+    """
+    Compute expected returns vector mu from daily returns.
+
+    mu_i = (1/T) sum_t r_{i,t}  (sample mean)
+    If annualize: mu_annual = mu_daily * 252 (arithmetic, not geometric)
+
+    Args:
+        returns: DataFrame of daily returns, shape (T, N), no NaN, no inf.
+        annualize: if True multiply by TRADING_DAYS_PER_YEAR.
+
+    Returns:
+        pd.Series indexed by ticker – mu vector for R_p = w^T mu.
+        Labeled Series prevents column-order drift in dot products.
+
+    Raises:
+        ValueError if empty, has NaN, or infinite.
+    """
+    if returns.empty:
+        raise ValueError("compute_expected_returns received empty DataFrame")
+
+    if returns.isna().any().any():
+        raise ValueError("compute_expected_returns: returns contain NaN")
+
+    if not np.isfinite(returns.values).all():
+        raise ValueError("compute_expected_returns: returns contain infinite values")
+
+    daily_mean = returns.mean()
+
+    if annualize:
+        mu = daily_mean * TRADING_DAYS_PER_YEAR
+    else:
+        mu = daily_mean
+
+    mu.name = "expected_return"
+    return mu
+
+
+def compute_volatility(
+    returns: pd.DataFrame,
+    annualize: bool = True,
+) -> pd.Series:
+    """
+    Compute volatility sigma per ticker from daily returns.
+
+    sigma_daily = std(returns)  (sample std, ddof=1 default in pandas)
+    sigma_annual = sigma_daily * sqrt(252)
+
+    Args:
+        returns: DataFrame of daily returns, no NaN, no inf.
+        annualize: if True multiply by sqrt(TRADING_DAYS_PER_YEAR).
+
+    Returns:
+        pd.Series indexed by ticker.
+    """
+    if returns.empty:
+        raise ValueError("compute_volatility received empty DataFrame")
+
+    if returns.isna().any().any():
+        raise ValueError("compute_volatility: returns contain NaN")
+
+    if not np.isfinite(returns.values).all():
+        raise ValueError("compute_volatility: returns contain infinite values")
+
+    daily_vol = returns.std()
+
+    if annualize:
+        vol = daily_vol * np.sqrt(TRADING_DAYS_PER_YEAR)
+    else:
+        vol = daily_vol
+
+    vol.name = "volatility"
+    return vol
