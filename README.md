@@ -174,6 +174,14 @@ streamlit run app/app.py
 ```
 
 
+### Phase 2 – Returns (Complete)
+
+```bash
+python -m src.preprocessing.returns
+# Loads latest data/processed/prices_clean_*.csv, computes returns (2219,7), mu, sigma, writes docs/return_summary.md
+# Sanity: AAPL sigma 0.20-0.40, JNJ 0.12-0.22
+```
+
 ## Team Members and Course Context
 
 - **Repository:** `aryansjainbtech25-sys/05-Financial-Portfolio-Optimization-and-Risk-Allocator`
