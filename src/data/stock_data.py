@@ -240,3 +240,124 @@ def fetch_and_cache(
     save_prices(clean_df, processed_path)
 
     return clean_df
+
+
+def validate_price_data(df: pd.DataFrame) -> dict:
+    if df.empty:
+        raise ValueError("validate_price_data received empty DataFrame")
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df = df.copy()
+        df.index = pd.to_datetime(df.index)
+
+    n_tickers = df.shape[1]
+    n_rows = df.shape[0]
+    start_date = df.index.min()
+    end_date = df.index.max()
+
+    # Trading days per year sanity check
+    years = (end_date - start_date).days / 365.25
+    years = years if years > 0 else 1
+    n_trading_days_per_year_avg = n_rows / years
+
+    all_positive = bool((df > 0).all().all())
+    has_nan = bool(df.isna().any().any())
+    duplicate_dates = bool(df.index.duplicated().any())
+
+    # Count gaps >5 calendar days between adjacent trading dates
+    gaps = (df.index.to_series().diff().dropna().dt.days > 5).sum()
+
+    per_ticker_first = {}
+    per_ticker_last = {}
+    per_ticker_missing = {}
+
+    for col in df.columns:
+        s = df[col].dropna()
+        per_ticker_first[col] = s.index.min() if not s.empty else None
+        per_ticker_last[col] = s.index.max() if not s.empty else None
+        per_ticker_missing[col] = int(df[col].isna().sum())
+
+    return {
+        "n_tickers": n_tickers,
+        "n_rows": n_rows,
+        "start_date": str(start_date.date()) if hasattr(start_date, 'date') else str(start_date),
+        "end_date": str(end_date.date()) if hasattr(end_date, 'date') else str(end_date),
+        "n_trading_days_per_year_avg": round(n_trading_days_per_year_avg, 1),
+        "all_positive": all_positive,
+        "has_nan": has_nan,
+        "duplicate_dates": duplicate_dates,
+        "date_gaps_over_5_days": int(gaps),
+        "per_ticker_first_date": {k: str(v.date()) if hasattr(v, 'date') else str(v) for k, v in per_ticker_first.items()},
+        "per_ticker_last_date": {k: str(v.date()) if hasattr(v, 'date') else str(v) for k, v in per_ticker_last.items()},
+        "per_ticker_missing_count": per_ticker_missing,
+    }
+
+
+def summary_to_markdown(summary: dict) -> str:
+    lines = []
+    lines.append("# Data Summary Report")
+    lines.append("")
+    lines.append(f"**Generated:** {pd.Timestamp.now().date()}")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| n_tickers | {summary['n_tickers']} |")
+    lines.append(f"| n_rows | {summary['n_rows']} |")
+    lines.append(f"| start_date | {summary['start_date']} |")
+    lines.append(f"| end_date | {summary['end_date']} |")
+    lines.append(f"| trading_days/year avg | {summary['n_trading_days_per_year_avg']} |")
+    lines.append(f"| all_positive | {summary['all_positive']} |")
+    lines.append(f"| has_nan | {summary['has_nan']} |")
+    lines.append(f"| duplicate_dates | {summary['duplicate_dates']} |")
+    lines.append(f"| date_gaps_over_5_days | {summary['date_gaps_over_5_days']} |")
+    lines.append("")
+    lines.append("### Per-Ticker Coverage")
+    lines.append("")
+    lines.append("| Ticker | First | Last | Missing |")
+    lines.append("|--------|-------|------|---------|")
+    for t in summary["per_ticker_first_date"]:
+        first = summary["per_ticker_first_date"][t]
+        last = summary["per_ticker_last_date"][t]
+        miss = summary["per_ticker_missing_count"][t]
+        lines.append(f"| {t} | {first} | {last} | {miss} |")
+    lines.append("")
+    lines.append("**Sanity:** trading_days/year ~252 indicates correct annualization. has_nan=False, all_positive=True required for downstream math.")
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    # One-command refresh for both team members
+    tickers = DEFAULT_TICKERS
+    start = DEFAULT_START_DATE
+    end = DEFAULT_END_DATE
+
+    if start and end and start > end:
+        raise ValueError(f"Invalid date range: start {start} > end {end}")
+
+    print(f"Downloading {tickers} from {start} to {end or 'today'}...")
+    raw = download_price_data(tickers, start, end)
+    print(f"Raw shape: {raw.shape}")
+
+    clean, dropped = clean_price_data(raw)
+    print(f"Clean shape: {clean.shape}, Dropped: {dropped}")
+
+    raw_file = RAW_DATA_DIR / _build_filename("prices_raw", tickers, start, end)
+    clean_file = PROCESSED_DATA_DIR / _build_filename("prices_clean", tickers, start, end)
+
+    save_prices(raw, raw_file)
+    save_prices(clean, clean_file)
+    print(f"Saved raw to {raw_file}")
+    print(f"Saved clean to {clean_file}")
+
+    summary = validate_price_data(clean)
+    print("\nValidation Summary:")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+
+    md = summary_to_markdown(summary)
+    print("\n" + md)
+
+    docs_path = Path("docs/data_summary.md")
+    docs_path.parent.mkdir(parents=True, exist_ok=True)
+    docs_path.write_text(md)
+    print(f"\nMarkdown report saved to {docs_path}")
